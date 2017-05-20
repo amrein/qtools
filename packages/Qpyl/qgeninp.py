@@ -508,7 +508,8 @@ Total wasted storage (wild approximation): \
 
 def genfeps(fep_proc_file, relax_input_file, restraint, energy_list_fn,
             frames, repeats, fromlambda, prefix, first_frame_eq,
-            pdb_file=None, fep_file=None, runscript_file=None):
+            pdb_file=None, fep_file=None, runscript_file=None,
+            manual_lambdas=None):
 
     """Generates inputs for a FEP/MD simulation with Q (qdyn5).
 
@@ -527,6 +528,7 @@ def genfeps(fep_proc_file, relax_input_file, restraint, energy_list_fn,
         pdb_file (string):  pdb pathname (used to convert placeholders)
         fep_file (string):  alternate fep file pathname (ignoring input's fep)
         runscript_file (string):  slurm/sge run script
+        manual_lambdas: a tupel of a float and two lists (lambda_initial, [forward_lambdas], [backward_lambdas])
 
     Returns:
         rep_dirs (list):  list of created replica folders
@@ -547,6 +549,15 @@ def genfeps(fep_proc_file, relax_input_file, restraint, energy_list_fn,
     # constants
     PREFIX_EQ = "equil_"
     PREFIX_FEP = "fep_"
+
+
+    # check sanity of user input tuple(3 x list)
+    if manual_lambdas is not None:
+        x, y, z = manual_lambdas
+        if type(x) == float and type(y) == list and type(z) == list:
+            pass
+        else:
+            raise QGenfepsError("Optional argument manual_lambdas must be a tuple of (float, list, list).")
 
 
     # check if files exist
@@ -651,25 +662,33 @@ def genfeps(fep_proc_file, relax_input_file, restraint, energy_list_fn,
     if fromlambda != None:
         lambda_initial = float(fromlambda)
         if lambda_initial > 1.0 or lambda_initial < 0.0:
-            raise QGenfepsError("Lambda value is bogus, are you on drugs?")
+            raise QGenfepsError("UserError: Lambda value is not between 0.0 and 1.0!")
 
-    # create lambda values, find the closest to the starting one and
-    # rearrange accordingly: [0.0, 0.02, 0.04, ... 0.98, 1.0]  for frames==51
-    lambdas = [float(num) / (frames - 1) for num in xrange(0, frames)]
+    if manual_lambdas is None:
+        # create lambda values, find the closest to the starting one and
+        # rearrange accordingly: [0.0, 0.02, 0.04, ... 0.98, 1.0]  for frames==51
+        lambdas = [float(num) / (frames - 1) for num in xrange(0, frames)]
 
-    # [2,]   for lambda_initial == 0.04 (or close to 0.04) and frames==51
-    l_i = [i for i in xrange(0, frames) if \
-            abs(lambdas[i] - lambda_initial) <= (1.0 / frames)]
-    # there should be only one
-    l_i = l_i[0]
-    lambda_initial = lambdas[l_i]
+        # [2,]   for lambda_initial == 0.04 (or close to 0.04) and frames==51
+        l_i = [i for i in xrange(0, frames) if \
+                abs(lambdas[i] - lambda_initial) <= (1.0 / frames)]
+        # there should be only one
+        l_i = l_i[0]
+        lambda_initial = lambdas[l_i]
 
-    # [0.02, 0.0,] for the case of lambda_initial == 0.04 and frames == 51
-    forward_lambdas = list(reversed(lambdas[0:l_i]))
-    # [0.06, 0.08, ..., 1.0] for the case of lambda_initial == 0.04, fr. == 51
-    backward_lambdas = lambdas[l_i+1:]
+        # [0.02, 0.0,] for the case of lambda_initial == 0.04 and frames == 51
+        forward_lambdas = list(reversed(lambdas[0:l_i]))
+        # [0.06, 0.08, ..., 1.0] for the case of lambda_initial == 0.04, fr. == 51
+        backward_lambdas = lambdas[l_i+1:]
+
+    else:
+        lambda_initial, forward_lambdas, backward_lambdas = manual_lambdas
+
 
     lambdas = [lambda_initial,] + forward_lambdas + backward_lambdas
+
+    if manual_lambdas is not None and len(lambdas) != frames:
+        raise QGenfepsError('UserError: Lenght of manual_lambdas != frames.')
 
     # print out some useful information
     logger.info("Using restart file: {}"
@@ -699,7 +718,7 @@ def genfeps(fep_proc_file, relax_input_file, restraint, energy_list_fn,
     else:
         logger.info("No Q runscript given.")
 
-    # handle the whole restraint coordinates crap...
+    # handle the whole restraint coordinates stuff ...
     # rest_file is the file from the relaxation input (if any)
     # rest_fn is the basename of the restraints file (either from input
     # or relaxed.re.rest), or None if rest. to topology
